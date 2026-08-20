@@ -9,7 +9,8 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    WebAppInfo
+    WebAppInfo,
+    CallbackQuery
 )
 from dotenv import load_dotenv
 
@@ -66,6 +67,47 @@ async def init_database():
 
 def is_admin(message):
     return message.chat.id == ADMIN_CHAT_ID
+
+
+# =========================
+# КЛАВИАТУРА СТАТУСОВ
+# =========================
+
+def status_keyboard(order_number):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🟡 В обработке",
+                    callback_data=f"status|{order_number}|В обработке"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🟢 Подтверждён",
+                    callback_data=f"status|{order_number}|Подтверждён"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📦 Готов к выдаче",
+                    callback_data=f"status|{order_number}|Готов к выдаче"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✅ Выполнен",
+                    callback_data=f"status|{order_number}|Выполнен"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отменён",
+                    callback_data=f"status|{order_number}|Отменён"
+                )
+            ]
+        ]
+    )
 
 
 # =========================
@@ -160,9 +202,7 @@ async def orders_handler(message):
         """)
 
     if not orders:
-        await message.answer(
-            "📦 Заказов пока нет."
-        )
+        await message.answer("📦 Заказов пока нет.")
         return
 
     text = "📦 <b>Последние заказы</b>\n\n"
@@ -186,7 +226,7 @@ async def orders_handler(message):
 
 
 # =========================
-# /ORDER НОМЕР
+# /ORDER
 # ТОЛЬКО ДЛЯ АДМИНА
 # =========================
 
@@ -205,13 +245,8 @@ async def order_details_handler(message):
         )
         return
 
-    # Получаем номер заказа
     order_number = command_parts[1].strip()
 
-    # Поддерживаем:
-    # /order 2
-    # /order №2
-    # /order № 2
     clean_order_number = (
         order_number
         .replace("№", "")
@@ -219,7 +254,6 @@ async def order_details_handler(message):
         .strip()
     )
 
-    # Ищем заказ в PostgreSQL
     async with db_pool.acquire() as connection:
         order = await connection.fetchrow(
             """
@@ -244,24 +278,19 @@ async def order_details_handler(message):
         )
         return
 
-    # Получаем товары
     items = order["items"] or []
 
-    # В некоторых случаях PostgreSQL/драйвер может вернуть JSONB
-    # как строку. Преобразуем её обратно в список.
     if isinstance(items, str):
         try:
             items = json.loads(items)
         except json.JSONDecodeError:
             items = []
 
-    # Формируем список товаров
     items_text = ""
 
     if isinstance(items, list):
         for item in items:
 
-            # На случай, если отдельный товар тоже оказался строкой
             if isinstance(item, str):
                 try:
                     item = json.loads(item)
@@ -278,7 +307,6 @@ async def order_details_handler(message):
     if not items_text:
         items_text = "—\n"
 
-    # Формируем сообщение
     text = (
         f"🛍 <b>Заказ №{clean_order_number}</b>\n\n"
         f"👤 <b>Имя:</b> {order['name'] or '—'}\n"
@@ -292,7 +320,124 @@ async def order_details_handler(message):
 
     await message.answer(
         text,
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=status_keyboard(clean_order_number)
+    )
+
+
+# =========================
+# ИЗМЕНЕНИЕ СТАТУСА
+# ТОЛЬКО ДЛЯ АДМИНА
+# =========================
+
+@dp.callback_query()
+async def status_callback(callback: CallbackQuery):
+    if callback.message.chat.id != ADMIN_CHAT_ID:
+        await callback.answer(
+            "⛔ Нет доступа",
+            show_alert=True
+        )
+        return
+
+    data = callback.data
+
+    if not data.startswith("status|"):
+        await callback.answer()
+        return
+
+    parts = data.split("|", 2)
+
+    if len(parts) != 3:
+        await callback.answer(
+            "Ошибка",
+            show_alert=True
+        )
+        return
+
+    _, order_number, new_status = parts
+
+    async with db_pool.acquire() as connection:
+        order = await connection.fetchrow(
+            """
+            SELECT
+                order_number,
+                name,
+                telegram,
+                total,
+                delivery,
+                items
+            FROM orders
+            WHERE REPLACE(REPLACE(order_number, '№', ''), ' ', '') = $1
+            """,
+            order_number
+        )
+
+        if not order:
+            await callback.answer(
+                "Заказ не найден",
+                show_alert=True
+            )
+            return
+
+        await connection.execute(
+            """
+            UPDATE orders
+            SET status = $1
+            WHERE REPLACE(REPLACE(order_number, '№', ''), ' ', '') = $2
+            """,
+            new_status,
+            order_number
+        )
+
+    await callback.answer(
+        f"Статус изменён: {new_status}"
+    )
+
+    # Обновляем сообщение
+    items = order["items"] or []
+
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except json.JSONDecodeError:
+            items = []
+
+    items_text = ""
+
+    if isinstance(items, list):
+        for item in items:
+
+            if isinstance(item, str):
+                try:
+                    item = json.loads(item)
+                except json.JSONDecodeError:
+                    continue
+
+            if isinstance(item, dict):
+                items_text += (
+                    f"• {item.get('name', 'Товар')} — "
+                    f"{item.get('size', '—')} × "
+                    f"{item.get('quantity', 1)}\n"
+                )
+
+    if not items_text:
+        items_text = "—\n"
+
+    text = (
+        f"🛍 <b>Заказ №{order_number}</b>\n\n"
+        f"👤 <b>Имя:</b> {order['name'] or '—'}\n"
+        f"💬 <b>Telegram:</b> {order['telegram'] or '—'}\n\n"
+        f"📦 <b>Товары:</b>\n"
+        f"{items_text}\n"
+        f"💰 <b>Сумма:</b> {order['total']} ₽\n"
+        f"🚚 <b>Получение:</b> {order['delivery'] or '—'}\n"
+        f"🟢 <b>Статус:</b> {new_status}\n"
+    )
+
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=status_keyboard(order_number)
     )
 
 
@@ -311,7 +456,6 @@ async def order_handler(request):
         delivery = data.get("delivery")
         items = data.get("items", [])
 
-        # Сохраняем заказ в PostgreSQL
         async with db_pool.acquire() as connection:
             await connection.execute(
                 """
@@ -336,7 +480,6 @@ async def order_handler(request):
                 "Принят"
             )
 
-        # Формируем список товаров для сообщения админу
         items_text = ""
 
         for item in items:
@@ -346,7 +489,6 @@ async def order_handler(request):
                 f"{item.get('quantity')}\n"
             )
 
-        # Сообщение администратору
         text = (
             f"🛍 <b>Новый заказ Velora №{order_number}</b>\n\n"
             f"👤 <b>Имя:</b> {name}\n"
@@ -451,7 +593,6 @@ async def main():
 
     try:
         await dp.start_polling(bot)
-
     finally:
         if db_pool:
             await db_pool.close()
