@@ -139,7 +139,6 @@ async def help_handler(message):
 
 # =========================
 # /ORDERS
-# ТОЛЬКО ДЛЯ АДМИНА
 # =========================
 
 @dp.message(Command("orders"))
@@ -176,7 +175,7 @@ async def orders_handler(message):
 
     text += (
         "\nЧтобы открыть заказ подробнее:\n"
-        "<code>/order НОМЕР</code>"
+        "<code>/order 1</code>"
     )
 
     await message.answer(
@@ -187,7 +186,6 @@ async def orders_handler(message):
 
 # =========================
 # /ORDER НОМЕР
-# ТОЛЬКО ДЛЯ АДМИНА
 # =========================
 
 @dp.message(Command("order"))
@@ -208,10 +206,16 @@ async def order_details_handler(message):
     # Получаем номер после /order
     order_number = command_parts[1].strip()
 
-    # Убираем символ №
-    order_number = order_number.replace("№", "").strip()
+    # Убираем № и пробелы
+    clean_order_number = (
+        order_number
+        .replace("№", "")
+        .replace(" ", "")
+        .strip()
+    )
 
-    # Ищем заказ
+    # Ищем заказ независимо от того,
+    # хранится ли номер как 2, №2 или № 2
     async with db_pool.acquire() as connection:
         order = await connection.fetchrow(
             """
@@ -225,14 +229,17 @@ async def order_details_handler(message):
                 status,
                 created_at
             FROM orders
-            WHERE order_number = $1
+            WHERE REPLACE(
+                REPLACE(order_number, '№', ''),
+                ' ',
+            ) = $1
             """,
-            order_number
+            clean_order_number
         )
 
     if not order:
         await message.answer(
-            f"❌ Заказ №{order_number} не найден."
+            f"❌ Заказ №{clean_order_number} не найден."
         )
         return
 
@@ -248,7 +255,7 @@ async def order_details_handler(message):
         )
 
     text = (
-        f"🛍 <b>Заказ №{order['order_number']}</b>\n\n"
+        f"🛍 <b>Заказ №{clean_order_number}</b>\n\n"
         f"👤 <b>Имя:</b> {order['name'] or '—'}\n"
         f"💬 <b>Telegram:</b> {order['telegram'] or '—'}\n\n"
         f"📦 <b>Товары:</b>\n"
@@ -279,7 +286,7 @@ async def order_handler(request):
         delivery = data.get("delivery")
         items = data.get("items", [])
 
-        # Сохраняем заказ в PostgreSQL
+        # Сохраняем заказ
         async with db_pool.acquire() as connection:
             await connection.execute(
                 """
@@ -304,7 +311,7 @@ async def order_handler(request):
                 "Принят"
             )
 
-        # Формируем список товаров
+        # Формируем товары
         items_text = ""
 
         for item in items:
@@ -314,7 +321,7 @@ async def order_handler(request):
                 f"{item.get('quantity')}\n"
             )
 
-        # Сообщение администратору
+        # Сообщение админу
         text = (
             f"🛍 <b>Новый заказ Velora №{order_number}</b>\n\n"
             f"👤 <b>Имя:</b> {name}\n"
@@ -370,7 +377,7 @@ async def options_handler(request):
 
 
 # =========================
-# ПРОВЕРКА СЕРВЕРА
+# HEALTH CHECK
 # =========================
 
 async def health_handler(request):
