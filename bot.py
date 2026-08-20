@@ -1,22 +1,59 @@
 import asyncio
+import json
 import os
 
+import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    WebAppInfo
+)
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Ссылка на опубликованный магазин Velora
 SHOP_URL = "https://010xxx513.github.io/Velora/"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+db_pool = None
+
+
+# =========================
+# БАЗА ДАННЫХ
+# =========================
+
+async def init_database():
+    global db_pool
+
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
+
+    async with db_pool.acquire() as connection:
+        await connection.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                order_number TEXT UNIQUE NOT NULL,
+                name TEXT,
+                telegram TEXT,
+                total NUMERIC,
+                delivery TEXT,
+                items JSONB,
+                status TEXT DEFAULT 'Принят',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+    print("PostgreSQL подключён")
+    print("Таблица orders готова")
 
 
 # =========================
@@ -71,6 +108,32 @@ async def order_handler(request):
         delivery = data.get("delivery")
         items = data.get("items", [])
 
+        # Сохраняем заказ в PostgreSQL
+        async with db_pool.acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO orders (
+                    order_number,
+                    name,
+                    telegram,
+                    total,
+                    delivery,
+                    items,
+                    status
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+                ON CONFLICT (order_number) DO NOTHING
+                """,
+                str(order_number),
+                name,
+                telegram,
+                total,
+                delivery,
+                json.dumps(items, ensure_ascii=False),
+                "Принят"
+            )
+
+        # Формируем сообщение администратору
         items_text = ""
 
         for item in items:
@@ -107,7 +170,10 @@ async def order_handler(request):
         print("Ошибка заказа:", error)
 
         return web.json_response(
-            {"ok": False, "error": str(error)},
+            {
+                "ok": False,
+                "error": str(error)
+            },
             status=500,
             headers={
                 "Access-Control-Allow-Origin": "*"
@@ -126,10 +192,9 @@ async def options_handler(request):
     )
 
 
-# Проверка, что сервер работает
 async def health_handler(request):
     return web.json_response({
-        "ok": True,
+        "status": "ok",
         "service": "VeloraBot"
     })
 
@@ -144,7 +209,6 @@ async def start_web_server():
     runner = web.AppRunner(app)
     await runner.setup()
 
-    # Render передаёт порт через переменную PORT
     port = int(os.getenv("PORT", 8000))
 
     site = web.TCPSite(
@@ -155,7 +219,7 @@ async def start_web_server():
 
     await site.start()
 
-    print(f"Сервер заказов запущен на порту {port}")
+    print(f"Web-сервер запущен на порту {port}")
 
 
 # =========================
@@ -163,11 +227,16 @@ async def start_web_server():
 # =========================
 
 async def main():
+    await init_database()
     await start_web_server()
 
     print("Velora Bot запущен!")
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if db_pool:
+            await db_pool.close()
 
 
 if __name__ == "__main__":
