@@ -84,12 +84,34 @@ async def start_handler(message):
 
 @dp.message(Command("help"))
 async def help_handler(message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛍 Открыть Velora",
+                    web_app=WebAppInfo(url=SHOP_URL)
+                )
+            ]
+        ]
+    )
+
     await message.answer(
         "🖤 <b>Velora — помощь</b>\n\n"
-        "🛍 Открыть магазин — нажми кнопку «Открыть Velora».\n"
-        "📦 Для оформления заказа выбери товар, размер и заполни данные.\n\n"
-        "Если возникли вопросы — напиши нам.",
-        parse_mode="HTML"
+        "🛍 <b>Магазин</b>\n"
+        "Нажми «Открыть Velora», чтобы посмотреть каталог и оформить заказ.\n\n"
+        "📦 <b>Как оформить заказ</b>\n"
+        "Выбери товар → размер → добавь его в корзину → "
+        "укажи данные → подтверди заказ.\n\n"
+        "🚚 <b>Получение</b>\n"
+        "После оформления с тобой свяжется менеджер для подтверждения заказа "
+        "и деталей получения.\n\n"
+        "💬 <b>Поддержка</b>\n"
+        "Если возникли вопросы по товару или заказу — напиши нам.\n\n"
+        "<b>Команды:</b>\n"
+        "/start — открыть Velora\n"
+        "/help — помощь",
+        parse_mode="HTML",
+        reply_markup=keyboard
     )
 
 
