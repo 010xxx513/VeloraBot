@@ -139,6 +139,7 @@ async def help_handler(message):
 
 # =========================
 # /ORDERS
+# ТОЛЬКО ДЛЯ АДМИНА
 # =========================
 
 @dp.message(Command("orders"))
@@ -159,9 +160,7 @@ async def orders_handler(message):
         """)
 
     if not orders:
-        await message.answer(
-            "📦 Заказов пока нет."
-        )
+        await message.answer("📦 Заказов пока нет.")
         return
 
     text = "📦 <b>Последние заказы</b>\n\n"
@@ -186,6 +185,7 @@ async def orders_handler(message):
 
 # =========================
 # /ORDER НОМЕР
+# ТОЛЬКО ДЛЯ АДМИНА
 # =========================
 
 @dp.message(Command("order"))
@@ -203,10 +203,12 @@ async def order_details_handler(message):
         )
         return
 
-    # Получаем номер после /order
     order_number = command_parts[1].strip()
 
-    # Убираем № и пробелы
+    # Поддерживаем:
+    # /order 2
+    # /order №2
+    # /order № 2
     clean_order_number = (
         order_number
         .replace("№", "")
@@ -214,8 +216,6 @@ async def order_details_handler(message):
         .strip()
     )
 
-    # Ищем заказ независимо от того,
-    # хранится ли номер как 2, №2 или № 2
     async with db_pool.acquire() as connection:
         order = await connection.fetchrow(
             """
@@ -229,10 +229,7 @@ async def order_details_handler(message):
                 status,
                 created_at
             FROM orders
-            WHERE REPLACE(
-                REPLACE(order_number, '№', ''),
-                ' ',
-            ) = $1
+            WHERE REPLACE(REPLACE(order_number, '№', ''), ' ', '') = $1
             """,
             clean_order_number
         )
@@ -286,7 +283,6 @@ async def order_handler(request):
         delivery = data.get("delivery")
         items = data.get("items", [])
 
-        # Сохраняем заказ
         async with db_pool.acquire() as connection:
             await connection.execute(
                 """
@@ -311,7 +307,6 @@ async def order_handler(request):
                 "Принят"
             )
 
-        # Формируем товары
         items_text = ""
 
         for item in items:
@@ -321,7 +316,6 @@ async def order_handler(request):
                 f"{item.get('quantity')}\n"
             )
 
-        # Сообщение админу
         text = (
             f"🛍 <b>Новый заказ Velora №{order_number}</b>\n\n"
             f"👤 <b>Имя:</b> {name}\n"
@@ -426,7 +420,6 @@ async def main():
 
     try:
         await dp.start_polling(bot)
-
     finally:
         if db_pool:
             await db_pool.close()
