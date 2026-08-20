@@ -61,7 +61,15 @@ async def init_database():
 
 
 # =========================
-# КОМАНДЫ БОТА
+# ПРОВЕРКА АДМИНА
+# =========================
+
+def is_admin(message):
+    return message.chat.id == ADMIN_CHAT_ID
+
+
+# =========================
+# /START
 # =========================
 
 @dp.message(CommandStart())
@@ -85,6 +93,10 @@ async def start_handler(message):
         reply_markup=keyboard
     )
 
+
+# =========================
+# /HELP
+# =========================
 
 @dp.message(Command("help"))
 async def help_handler(message):
@@ -122,6 +134,124 @@ async def help_handler(message):
         "/help — помощь",
         parse_mode="HTML",
         reply_markup=keyboard
+    )
+
+
+# =========================
+# /ORDERS
+# ТОЛЬКО ДЛЯ АДМИНА
+# =========================
+
+@dp.message(Command("orders"))
+async def orders_handler(message):
+    if not is_admin(message):
+        return
+
+    async with db_pool.acquire() as connection:
+        orders = await connection.fetch("""
+            SELECT
+                order_number,
+                total,
+                status,
+                created_at
+            FROM orders
+            ORDER BY id DESC
+            LIMIT 20
+        """)
+
+    if not orders:
+        await message.answer("📦 Заказов пока нет.")
+        return
+
+    text = "📦 <b>Последние заказы</b>\n\n"
+
+    for order in orders:
+        text += (
+            f"№{order['order_number']} — "
+            f"{order['total']} ₽ — "
+            f"{order['status']}\n"
+        )
+
+    text += "\nЧтобы открыть заказ подробнее:\n"
+    text += "<code>/order НОМЕР</code>"
+
+    await message.answer(
+        text,
+        parse_mode="HTML"
+    )
+
+
+# =========================
+# /ORDER НОМЕР
+# ТОЛЬКО ДЛЯ АДМИНА
+# =========================
+
+@dp.message(Command("order"))
+async def order_details_handler(message):
+    if not is_admin(message):
+        return
+
+    command_parts = message.text.split(maxsplit=1)
+
+    if len(command_parts) < 2:
+        await message.answer(
+            "Использование:\n"
+            "<code>/order 1</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    order_number = command_parts[1].strip()
+
+    async with db_pool.acquire() as connection:
+        order = await connection.fetchrow(
+            """
+            SELECT
+                order_number,
+                name,
+                telegram,
+                total,
+                delivery,
+                items,
+                status,
+                created_at
+            FROM orders
+            WHERE order_number = $1
+            """,
+            order_number
+        )
+
+    if not order:
+        await message.answer(
+            f"❌ Заказ №{order_number} не найден."
+        )
+        return
+
+    items = order["items"] or []
+
+    items_text = ""
+
+    for item in items:
+        items_text += (
+            f"• {item.get('name', 'Товар')} — "
+            f"{item.get('size', '—')} × "
+            f"{item.get('quantity', 1)}\n"
+        )
+
+    text = (
+        f"🛍 <b>Заказ №{order['order_number']}</b>\n\n"
+        f"👤 <b>Имя:</b> {order['name'] or '—'}\n"
+        f"💬 <b>Telegram:</b> {order['telegram'] or '—'}\n\n"
+        f"📦 <b>Товары:</b>\n"
+        f"{items_text or '—'}\n"
+        f"💰 <b>Сумма:</b> {order['total']} ₽\n"
+        f"🚚 <b>Получение:</b> {order['delivery'] or '—'}\n"
+        f"🟢 <b>Статус:</b> {order['status']}\n"
+    )
+
+    await message.answer(
+        text,
+        parse_mode="HTML"
     )
 
 
