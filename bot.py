@@ -14,6 +14,10 @@ from aiogram.types import (
 from dotenv import load_dotenv
 
 
+# =========================
+# НАСТРОЙКИ
+# =========================
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -60,6 +64,28 @@ async def init_database():
 # КОМАНДЫ БОТА
 # =========================
 
+@dp.message(CommandStart())
+async def start_handler(message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛍 Открыть Velora",
+                    web_app=WebAppInfo(url=SHOP_URL)
+                )
+            ]
+        ]
+    )
+
+    await message.answer(
+        "Привет! 👋\n\n"
+        "Добро пожаловать в <b>Velora</b> — онлайн-магазин одежды и обуви.\n\n"
+        "Выбирай товар, оформляй заказ и наслаждайся покупкой 🖤",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+
 @dp.message(Command("help"))
 async def help_handler(message):
     keyboard = InlineKeyboardMarkup(
@@ -91,25 +117,6 @@ async def help_handler(message):
         "и деталей получения.\n\n"
         "💬 <b>Поддержка</b>\n"
         "Есть вопросы по товару или заказу? Напиши нам — поможем.\n\n"
-        "<b>Команды:</b>\n"
-        "/start — открыть Velora\n"
-        "/help — помощь",
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
-
-    await message.answer(
-        "🖤 <b>Velora — помощь</b>\n\n"
-        "🛍 <b>Магазин</b>\n"
-        "Нажми «Открыть Velora», чтобы посмотреть каталог и оформить заказ.\n\n"
-        "📦 <b>Как оформить заказ</b>\n"
-        "Выбери товар → размер → добавь его в корзину → "
-        "укажи данные → подтверди заказ.\n\n"
-        "🚚 <b>Получение</b>\n"
-        "После оформления с тобой свяжется менеджер для подтверждения заказа "
-        "и деталей получения.\n\n"
-        "💬 <b>Поддержка</b>\n"
-        "Если возникли вопросы по товару или заказу — напиши нам.\n\n"
         "<b>Команды:</b>\n"
         "/start — открыть Velora\n"
         "/help — помощь",
@@ -206,6 +213,10 @@ async def order_handler(request):
         )
 
 
+# =========================
+# CORS
+# =========================
+
 async def options_handler(request):
     return web.Response(
         status=204,
@@ -217,12 +228,20 @@ async def options_handler(request):
     )
 
 
+# =========================
+# ПРОВЕРКА СЕРВЕРА
+# =========================
+
 async def health_handler(request):
     return web.json_response({
         "status": "ok",
         "service": "VeloraBot"
     })
 
+
+# =========================
+# WEB-СЕРВЕР
+# =========================
 
 async def start_web_server():
     app = web.Application()
@@ -259,10 +278,15 @@ async def main():
 
     try:
         await dp.start_polling(bot)
+
     finally:
         if db_pool:
             await db_pool.close()
 
+
+# =========================
+# START
+# =========================
 
 if __name__ == "__main__":
     asyncio.run(main())
