@@ -60,28 +60,6 @@ async def init_database():
 # КОМАНДЫ БОТА
 # =========================
 
-@dp.message(CommandStart())
-async def start_handler(message):
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🛍 Открыть Velora",
-                    web_app=WebAppInfo(url=SHOP_URL)
-                )
-            ]
-        ]
-    )
-
-    await message.answer(
-        "Привет! 👋\n\n"
-        "Добро пожаловать в <b>Velora</b> — онлайн-магазин одежды и обуви.\n\n"
-        "Выбирай товар, оформляй заказ и наслаждайся покупкой 🖤",
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
-
-
 @dp.message(Command("help"))
 async def help_handler(message):
     keyboard = InlineKeyboardMarkup(
@@ -91,8 +69,33 @@ async def help_handler(message):
                     text="🛍 Открыть Velora",
                     web_app=WebAppInfo(url=SHOP_URL)
                 )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💬 Связаться с нами",
+                    url="https://t.me/velllorrra"
+                )
             ]
         ]
+    )
+
+    await message.answer(
+        "🖤 <b>Velora — помощь</b>\n\n"
+        "🛍 <b>Магазин</b>\n"
+        "Нажми «Открыть Velora», чтобы посмотреть каталог и оформить заказ.\n\n"
+        "📦 <b>Как оформить заказ</b>\n"
+        "Выбери товар → размер → добавь его в корзину → "
+        "укажи данные → подтверди заказ.\n\n"
+        "🚚 <b>Получение</b>\n"
+        "После оформления с тобой свяжется менеджер для подтверждения заказа "
+        "и деталей получения.\n\n"
+        "💬 <b>Поддержка</b>\n"
+        "Есть вопросы по товару или заказу? Напиши нам — поможем.\n\n"
+        "<b>Команды:</b>\n"
+        "/start — открыть Velora\n"
+        "/help — помощь",
+        parse_mode="HTML",
+        reply_markup=keyboard
     )
 
     await message.answer(
