@@ -2,7 +2,7 @@ import asyncio
 import os
 
 from aiohttp import web
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from dotenv import load_dotenv
@@ -126,24 +126,36 @@ async def options_handler(request):
     )
 
 
+# Проверка, что сервер работает
+async def health_handler(request):
+    return web.json_response({
+        "ok": True,
+        "service": "VeloraBot"
+    })
+
+
 async def start_web_server():
     app = web.Application()
 
+    app.router.add_get("/", health_handler)
     app.router.add_post("/api/order", order_handler)
     app.router.add_options("/api/order", options_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
 
+    # Render передаёт порт через переменную PORT
+    port = int(os.getenv("PORT", 8000))
+
     site = web.TCPSite(
         runner,
-        "127.0.0.1",
-        8000
+        "0.0.0.0",
+        port
     )
 
     await site.start()
 
-    print("Сервер заказов запущен: http://127.0.0.1:8000")
+    print(f"Сервер заказов запущен на порту {port}")
 
 
 # =========================
