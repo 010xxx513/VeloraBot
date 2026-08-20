@@ -160,7 +160,9 @@ async def orders_handler(message):
         """)
 
     if not orders:
-        await message.answer("📦 Заказов пока нет.")
+        await message.answer(
+            "📦 Заказов пока нет."
+        )
         return
 
     text = "📦 <b>Последние заказы</b>\n\n"
@@ -203,6 +205,7 @@ async def order_details_handler(message):
         )
         return
 
+    # Получаем номер заказа
     order_number = command_parts[1].strip()
 
     # Поддерживаем:
@@ -216,6 +219,7 @@ async def order_details_handler(message):
         .strip()
     )
 
+    # Ищем заказ в PostgreSQL
     async with db_pool.acquire() as connection:
         order = await connection.fetchrow(
             """
@@ -240,23 +244,47 @@ async def order_details_handler(message):
         )
         return
 
+    # Получаем товары
     items = order["items"] or []
 
+    # В некоторых случаях PostgreSQL/драйвер может вернуть JSONB
+    # как строку. Преобразуем её обратно в список.
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except json.JSONDecodeError:
+            items = []
+
+    # Формируем список товаров
     items_text = ""
 
-    for item in items:
-        items_text += (
-            f"• {item.get('name', 'Товар')} — "
-            f"{item.get('size', '—')} × "
-            f"{item.get('quantity', 1)}\n"
-        )
+    if isinstance(items, list):
+        for item in items:
 
+            # На случай, если отдельный товар тоже оказался строкой
+            if isinstance(item, str):
+                try:
+                    item = json.loads(item)
+                except json.JSONDecodeError:
+                    continue
+
+            if isinstance(item, dict):
+                items_text += (
+                    f"• {item.get('name', 'Товар')} — "
+                    f"{item.get('size', '—')} × "
+                    f"{item.get('quantity', 1)}\n"
+                )
+
+    if not items_text:
+        items_text = "—\n"
+
+    # Формируем сообщение
     text = (
         f"🛍 <b>Заказ №{clean_order_number}</b>\n\n"
         f"👤 <b>Имя:</b> {order['name'] or '—'}\n"
         f"💬 <b>Telegram:</b> {order['telegram'] or '—'}\n\n"
         f"📦 <b>Товары:</b>\n"
-        f"{items_text or '—'}\n"
+        f"{items_text}\n"
         f"💰 <b>Сумма:</b> {order['total']} ₽\n"
         f"🚚 <b>Получение:</b> {order['delivery'] or '—'}\n"
         f"🟢 <b>Статус:</b> {order['status']}\n"
@@ -283,6 +311,7 @@ async def order_handler(request):
         delivery = data.get("delivery")
         items = data.get("items", [])
 
+        # Сохраняем заказ в PostgreSQL
         async with db_pool.acquire() as connection:
             await connection.execute(
                 """
@@ -307,6 +336,7 @@ async def order_handler(request):
                 "Принят"
             )
 
+        # Формируем список товаров для сообщения админу
         items_text = ""
 
         for item in items:
@@ -316,6 +346,7 @@ async def order_handler(request):
                 f"{item.get('quantity')}\n"
             )
 
+        # Сообщение администратору
         text = (
             f"🛍 <b>Новый заказ Velora №{order_number}</b>\n\n"
             f"👤 <b>Имя:</b> {name}\n"
@@ -420,6 +451,7 @@ async def main():
 
     try:
         await dp.start_polling(bot)
+
     finally:
         if db_pool:
             await db_pool.close()
