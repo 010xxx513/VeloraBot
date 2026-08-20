@@ -160,7 +160,9 @@ async def orders_handler(message):
         """)
 
     if not orders:
-        await message.answer("📦 Заказов пока нет.")
+        await message.answer(
+            "📦 Заказов пока нет."
+        )
         return
 
     text = "📦 <b>Последние заказы</b>\n\n"
@@ -172,8 +174,10 @@ async def orders_handler(message):
             f"{order['status']}\n"
         )
 
-    text += "\nЧтобы открыть заказ подробнее:\n"
-    text += "<code>/order НОМЕР</code>"
+    text += (
+        "\nЧтобы открыть заказ подробнее:\n"
+        "<code>/order НОМЕР</code>"
+    )
 
     await message.answer(
         text,
@@ -201,8 +205,13 @@ async def order_details_handler(message):
         )
         return
 
+    # Получаем номер после /order
     order_number = command_parts[1].strip()
 
+    # Убираем символ №
+    order_number = order_number.replace("№", "").strip()
+
+    # Ищем заказ
     async with db_pool.acquire() as connection:
         order = await connection.fetchrow(
             """
@@ -295,15 +304,17 @@ async def order_handler(request):
                 "Принят"
             )
 
-        # Формируем сообщение администратору
+        # Формируем список товаров
         items_text = ""
 
         for item in items:
             items_text += (
                 f"• {item.get('name')} — "
-                f"{item.get('size')} × {item.get('quantity')}\n"
+                f"{item.get('size')} × "
+                f"{item.get('quantity')}\n"
             )
 
+        # Сообщение администратору
         text = (
             f"🛍 <b>Новый заказ Velora №{order_number}</b>\n\n"
             f"👤 <b>Имя:</b> {name}\n"
