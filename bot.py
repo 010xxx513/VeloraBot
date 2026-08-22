@@ -43,18 +43,27 @@ async def init_database():
     db_pool = await asyncpg.create_pool(DATABASE_URL)
 
     async with db_pool.acquire() as connection:
+
         await connection.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,
                 order_number TEXT UNIQUE NOT NULL,
                 name TEXT,
                 telegram TEXT,
+                telegram_id BIGINT,
                 total NUMERIC,
                 delivery TEXT,
                 items JSONB,
                 status TEXT DEFAULT 'Принят',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+
+        # Если таблица orders уже существовала раньше,
+        # добавляем новую колонку без удаления старых данных.
+        await connection.execute("""
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS telegram_id BIGINT
         """)
 
     print("PostgreSQL подключён")
@@ -70,7 +79,7 @@ def is_admin(message):
 
 
 # =========================
-# КЛАВИАТУРА СТАТУСОВ
+# КНОПКИ СТАТУСОВ
 # =========================
 
 def status_keyboard(order_number):
@@ -108,6 +117,75 @@ def status_keyboard(order_number):
             ]
         ]
     )
+
+
+# =========================
+# УВЕДОМЛЕНИЕ КЛИЕНТА
+# =========================
+
+async def notify_customer(telegram_id, order_number, status):
+
+    if not telegram_id:
+        print(
+            f"У заказа №{order_number} нет Telegram ID клиента. "
+            f"Уведомление не отправлено."
+        )
+        return
+
+    messages = {
+        "В обработке": (
+            f"🛍 <b>Velora</b>\n\n"
+            f"Ваш заказ №{order_number} взят в обработку. 🟡\n\n"
+            f"Мы уже занимаемся вашим заказом."
+        ),
+
+        "Подтверждён": (
+            f"🛍 <b>Velora</b>\n\n"
+            f"Ваш заказ №{order_number} подтверждён! 🟢\n\n"
+            f"Спасибо за заказ 🖤"
+        ),
+
+        "Готов к выдаче": (
+            f"🛍 <b>Velora</b>\n\n"
+            f"Ваш заказ №{order_number} готов к выдаче! 📦\n\n"
+            f"Скоро вы сможете его забрать."
+        ),
+
+        "Выполнен": (
+            f"🛍 <b>Velora</b>\n\n"
+            f"Ваш заказ №{order_number} выполнен! ✅\n\n"
+            f"Спасибо, что выбрали Velora 🖤"
+        ),
+
+        "Отменён": (
+            f"🛍 <b>Velora</b>\n\n"
+            f"Ваш заказ №{order_number} отменён. ❌\n\n"
+            f"Если у вас есть вопросы, свяжитесь с нами."
+        )
+    }
+
+    text = messages.get(status)
+
+    if not text:
+        return
+
+    try:
+        await bot.send_message(
+            chat_id=int(telegram_id),
+            text=text,
+            parse_mode="HTML"
+        )
+
+        print(
+            f"Уведомление отправлено клиенту "
+            f"{telegram_id} по заказу №{order_number}"
+        )
+
+    except Exception as error:
+        print(
+            f"Не удалось отправить уведомление клиенту "
+            f"{telegram_id}: {error}"
+        )
 
 
 # =========================
@@ -181,11 +259,11 @@ async def help_handler(message):
 
 # =========================
 # /ORDERS
-# ТОЛЬКО ДЛЯ АДМИНА
 # =========================
 
 @dp.message(Command("orders"))
 async def orders_handler(message):
+
     if not is_admin(message):
         return
 
@@ -227,11 +305,11 @@ async def orders_handler(message):
 
 # =========================
 # /ORDER
-# ТОЛЬКО ДЛЯ АДМИНА
 # =========================
 
 @dp.message(Command("order"))
 async def order_details_handler(message):
+
     if not is_admin(message):
         return
 
@@ -261,6 +339,7 @@ async def order_details_handler(message):
                 order_number,
                 name,
                 telegram,
+                telegram_id,
                 total,
                 delivery,
                 items,
@@ -327,11 +406,11 @@ async def order_details_handler(message):
 
 # =========================
 # ИЗМЕНЕНИЕ СТАТУСА
-# ТОЛЬКО ДЛЯ АДМИНА
 # =========================
 
 @dp.callback_query()
 async def status_callback(callback: CallbackQuery):
+
     if callback.message.chat.id != ADMIN_CHAT_ID:
         await callback.answer(
             "⛔ Нет доступа",
@@ -357,15 +436,18 @@ async def status_callback(callback: CallbackQuery):
     _, order_number, new_status = parts
 
     async with db_pool.acquire() as connection:
+
         order = await connection.fetchrow(
             """
             SELECT
                 order_number,
                 name,
                 telegram,
+                telegram_id,
                 total,
                 delivery,
-                items
+                items,
+                status
             FROM orders
             WHERE REPLACE(REPLACE(order_number, '№', ''), ' ', '') = $1
             """,
@@ -378,6 +460,8 @@ async def status_callback(callback: CallbackQuery):
                 show_alert=True
             )
             return
+
+        old_status = order["status"]
 
         await connection.execute(
             """
@@ -393,7 +477,19 @@ async def status_callback(callback: CallbackQuery):
         f"Статус изменён: {new_status}"
     )
 
-    # Обновляем сообщение
+    # Если статус действительно изменился —
+    # отправляем уведомление клиенту.
+    if old_status != new_status:
+        await notify_customer(
+            telegram_id=order["telegram_id"],
+            order_number=order_number,
+            status=new_status
+        )
+
+    # =========================
+    # ОБНОВЛЯЕМ СООБЩЕНИЕ АДМИНА
+    # =========================
+
     items = order["items"] or []
 
     if isinstance(items, str):
@@ -446,43 +542,75 @@ async def status_callback(callback: CallbackQuery):
 # =========================
 
 async def order_handler(request):
+
     try:
         data = await request.json()
 
         order_number = data.get("number")
         name = data.get("name")
         telegram = data.get("telegram")
+        telegram_id = data.get("telegram_id")
         total = data.get("total")
         delivery = data.get("delivery")
         items = data.get("items", [])
 
+        # Приводим Telegram ID к числу.
+        if telegram_id:
+            try:
+                telegram_id = int(telegram_id)
+            except (ValueError, TypeError):
+                telegram_id = None
+
+        # Сохраняем заказ в PostgreSQL.
         async with db_pool.acquire() as connection:
+
             await connection.execute(
                 """
                 INSERT INTO orders (
                     order_number,
                     name,
                     telegram,
+                    telegram_id,
                     total,
                     delivery,
                     items,
                     status
                 )
-                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
-                ON CONFLICT (order_number) DO NOTHING
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7::jsonb,
+                    $8
+                )
+                ON CONFLICT (order_number)
+                DO UPDATE SET
+                    telegram_id = COALESCE(
+                        orders.telegram_id,
+                        EXCLUDED.telegram_id
+                    )
                 """,
                 str(order_number),
                 name,
                 telegram,
+                telegram_id,
                 total,
                 delivery,
                 json.dumps(items, ensure_ascii=False),
                 "Принят"
             )
 
+        # =========================
+        # СООБЩЕНИЕ АДМИНУ
+        # =========================
+
         items_text = ""
 
         for item in items:
+
             items_text += (
                 f"• {item.get('name')} — "
                 f"{item.get('size')} × "
@@ -514,6 +642,7 @@ async def order_handler(request):
         )
 
     except Exception as error:
+
         print("Ошибка заказа:", error)
 
         return web.json_response(
@@ -533,6 +662,7 @@ async def order_handler(request):
 # =========================
 
 async def options_handler(request):
+
     return web.Response(
         status=204,
         headers={
@@ -548,6 +678,7 @@ async def options_handler(request):
 # =========================
 
 async def health_handler(request):
+
     return web.json_response({
         "status": "ok",
         "service": "VeloraBot"
@@ -559,6 +690,7 @@ async def health_handler(request):
 # =========================
 
 async def start_web_server():
+
     app = web.Application()
 
     app.router.add_get("/", health_handler)
@@ -566,6 +698,7 @@ async def start_web_server():
     app.router.add_options("/api/order", options_handler)
 
     runner = web.AppRunner(app)
+
     await runner.setup()
 
     port = int(os.getenv("PORT", 8000))
@@ -586,6 +719,7 @@ async def start_web_server():
 # =========================
 
 async def main():
+
     await init_database()
     await start_web_server()
 
@@ -593,7 +727,9 @@ async def main():
 
     try:
         await dp.start_polling(bot)
+
     finally:
+
         if db_pool:
             await db_pool.close()
 
