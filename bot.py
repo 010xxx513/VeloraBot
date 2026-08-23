@@ -546,13 +546,16 @@ async def order_handler(request):
     try:
         data = await request.json()
 
-        order_number = data.get("number")
+        # Номер заказа НЕ принимаем от Mini App.
+        # Его выдаём здесь, в PostgreSQL, чтобы номера были уникальными
+        # и не зависели от localStorage браузера.
         name = data.get("name")
         telegram = data.get("telegram")
         telegram_id = data.get("telegram_id")
         total = data.get("total")
         delivery = data.get("delivery")
         items = data.get("items", [])
+        date = data.get("date")
 
         # Приводим Telegram ID к числу.
         if telegram_id:
@@ -561,47 +564,65 @@ async def order_handler(request):
             except (ValueError, TypeError):
                 telegram_id = None
 
-        # Сохраняем заказ в PostgreSQL.
+        # Создаём номер заказа атомарно на стороне PostgreSQL.
+        # pg_advisory_xact_lock не позволяет двум одновременным заказам
+        # получить один и тот же следующий номер.
         async with db_pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    918273645
+                )
 
-            await connection.execute(
-                """
-                INSERT INTO orders (
+                row = await connection.fetchrow(
+                    """
+                    SELECT COALESCE(
+                        MAX(
+                            CASE
+                                WHEN order_number ~ '^[0-9]+$'
+                                THEN order_number::BIGINT
+                            END
+                        ),
+                        0
+                    ) + 1 AS next_number
+                    FROM orders
+                    """
+                )
+
+                order_number = str(row["next_number"])
+
+                await connection.execute(
+                    """
+                    INSERT INTO orders (
+                        order_number,
+                        name,
+                        telegram,
+                        telegram_id,
+                        total,
+                        delivery,
+                        items,
+                        status
+                    )
+                    VALUES (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        $6,
+                        $7::jsonb,
+                        $8
+                    )
+                    """,
                     order_number,
                     name,
                     telegram,
                     telegram_id,
                     total,
                     delivery,
-                    items,
-                    status
+                    json.dumps(items, ensure_ascii=False),
+                    "Принят"
                 )
-                VALUES (
-                    $1,
-                    $2,
-                    $3,
-                    $4,
-                    $5,
-                    $6,
-                    $7::jsonb,
-                    $8
-                )
-                ON CONFLICT (order_number)
-                DO UPDATE SET
-                    telegram_id = COALESCE(
-                        orders.telegram_id,
-                        EXCLUDED.telegram_id
-                    )
-                """,
-                str(order_number),
-                name,
-                telegram,
-                telegram_id,
-                total,
-                delivery,
-                json.dumps(items, ensure_ascii=False),
-                "Принят"
-            )
 
         # =========================
         # СООБЩЕНИЕ АДМИНУ
@@ -635,7 +656,11 @@ async def order_handler(request):
         )
 
         return web.json_response(
-            {"ok": True},
+            {
+                "ok": True,
+                "number": order_number,
+                "date": date
+            },
             headers={
                 "Access-Control-Allow-Origin": "*"
             }
